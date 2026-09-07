@@ -16,6 +16,8 @@ import type {
   FFMessageDeleteDirData,
   FFMessageMountData,
   FFMessageUnmountData,
+  FFMessageMountDirectFileData,
+  FFMessageCancelDirectFileData,
   CallbackData,
   IsFirst,
   OK,
@@ -29,6 +31,7 @@ import {
   ERROR_NOT_LOADED,
   ERROR_IMPORT_FAILURE,
 } from "./errors.js";
+import { cancelDirectFileDevice, mountDirectFileDevice } from "./direct-file-device.js";
 
 declare global {
   interface WorkerGlobalScope {
@@ -163,6 +166,11 @@ const unmount = ({ mountPoint }: FFMessageUnmountData): OK => {
   return true;
 };
 
+const mountDirectFile = ({ path, buffer, port }: FFMessageMountDirectFileData): OK =>
+  mountDirectFileDevice(ffmpeg, path, buffer, port);
+const cancelDirectFile = ({ path }: FFMessageCancelDirectFileData): OK =>
+  cancelDirectFileDevice(ffmpeg, path);
+
 self.onmessage = async ({
   data: { id, type, data: _data },
 }: FFMessageEvent): Promise<void> => {
@@ -207,6 +215,12 @@ self.onmessage = async ({
         break;
       case FFMessageType.UNMOUNT:
         data = unmount(_data as FFMessageUnmountData);
+        break;
+      case FFMessageType.MOUNT_DIRECT_FILE:
+        data = mountDirectFile(_data as FFMessageMountDirectFileData);
+        break;
+      case FFMessageType.CANCEL_DIRECT_FILE:
+        data = cancelDirectFile(_data as FFMessageCancelDirectFileData);
         break;
       default:
         throw ERROR_UNKNOWN_MESSAGE_TYPE;

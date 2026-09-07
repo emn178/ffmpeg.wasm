@@ -19,6 +19,7 @@ import {
 } from "./types.js";
 import { getMessageID } from "./utils.js";
 import { ERROR_TERMINATED, ERROR_NOT_LOADED } from "./errors.js";
+import { createDirectFileBuffer, DIRECT_FILE_DEFAULT_BUFFER_SIZE } from "./direct-file-protocol.js";
 
 type FFMessageOptions = {
   signal?: AbortSignal;
@@ -34,6 +35,7 @@ type FFMessageOptions = {
  */
 export class FFmpeg {
   #worker: Worker | null = null;
+  #directFiles = new Map<string, { worker: Worker; buffer: SharedArrayBuffer }>();
   /**
    * #resolves and #rejects tracks Promise resolves and rejects to
    * be called when we receive message from web worker.
@@ -61,6 +63,8 @@ export class FFmpeg {
             break;
           case FFMessageType.MOUNT:
           case FFMessageType.UNMOUNT:
+          case FFMessageType.MOUNT_DIRECT_FILE:
+          case FFMessageType.CANCEL_DIRECT_FILE:
           case FFMessageType.EXEC:
           case FFMessageType.FFPROBE:
           case FFMessageType.WRITE_FILE:
@@ -302,6 +306,8 @@ export class FFmpeg {
     }
 
     if (this.#worker) {
+      this.#directFiles.forEach(({ worker }) => worker.terminate());
+      this.#directFiles.clear();
       this.#worker.terminate();
       this.#worker = null;
       this.loaded = false;
@@ -360,6 +366,54 @@ export class FFmpeg {
       },
       trans
     ) as Promise<OK>;
+  };
+
+  public mountDirectFile = async (
+    path: FFFSPath,
+    handle: FileSystemFileHandle,
+    { ioWorkerURL, bufferSize = DIRECT_FILE_DEFAULT_BUFFER_SIZE }: { ioWorkerURL?: string; bufferSize?: number } = {}
+  ): Promise<OK> => {
+    if (!globalThis.crossOriginIsolated) throw new DOMException("Direct file output requires cross-origin isolation", "NotSupportedError");
+    if (!handle || typeof handle.createWritable !== "function") throw new DOMException("File System Access API is unavailable", "NotSupportedError");
+    const worker = ioWorkerURL
+      ? new Worker(new URL(ioWorkerURL, import.meta.url), { type: "module" })
+      : new Worker(new URL("./direct-file-io.worker.js", import.meta.url), { type: "module" });
+    const channel = new MessageChannel();
+    const buffer = createDirectFileBuffer(bufferSize);
+    const ready = new Promise<void>((resolve, reject) => {
+      worker.onmessage = ({ data }) => {
+        if (data?.type === "READY") resolve();
+        else if (data?.type === "INIT_ERROR") reject(new DOMException(data.message || `Direct file initialization failed (errno ${data.error})`, data.error === 13 ? "NotAllowedError" : "InvalidStateError"));
+      };
+      worker.onerror = ({ message }) => reject(new Error(`Direct file I/O worker failed: ${message}`));
+    });
+    worker.postMessage({ type: "INIT", handle, buffer, port: channel.port1 }, [channel.port1]);
+    this.#directFiles.set(path, { worker, buffer });
+    try {
+      await ready;
+      return (await this.#send({ type: FFMessageType.MOUNT_DIRECT_FILE, data: { path, buffer, port: channel.port2 } }, [channel.port2])) as OK;
+    } catch (error) {
+      worker.terminate(); this.#directFiles.delete(path); throw error;
+    }
+  };
+
+  public getDirectFileStats = (path: FFFSPath): { bufferBytes: number; maxChunkBytes: number } | undefined => {
+    const directFile = this.#directFiles.get(path);
+    if (!directFile) return undefined;
+    return { bufferBytes: directFile.buffer.byteLength, maxChunkBytes: Atomics.load(new Int32Array(directFile.buffer, 0, 16), 9) };
+  };
+
+  public cancelDirectFile = async (path: FFFSPath): Promise<OK> => {
+    const directFile = this.#directFiles.get(path);
+    if (directFile) {
+      const control = new Int32Array(directFile.buffer, 0, 16);
+      Atomics.store(control, 7, 1);
+      Atomics.notify(control, 0);
+    }
+    const result = await this.#send({ type: FFMessageType.CANCEL_DIRECT_FILE, data: { path } }) as OK;
+    directFile?.worker.terminate();
+    this.#directFiles.delete(path);
+    return result;
   };
 
   /**
