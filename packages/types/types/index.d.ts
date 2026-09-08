@@ -116,6 +116,8 @@ export interface FFmpegCoreModule {
   /** default arguments prepend when running exec() */
   DEFAULT_ARGS: string[];
   FS: FS;
+  mountDirectFile(path: string, buffer: SharedArrayBuffer, port: MessagePort): boolean;
+  cancelDirectFile(path: string): boolean;
   NULL: Pointer;
   SIZE_I32: number;
 

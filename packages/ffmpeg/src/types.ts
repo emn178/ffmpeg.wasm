@@ -107,6 +107,14 @@ export interface FFMessageUnmountData {
   mountPoint: FFFSPath;
 }
 
+export interface FFMessageMountDirectFileData {
+  path: FFFSPath;
+  buffer: SharedArrayBuffer;
+  port: MessagePort;
+}
+
+export interface FFMessageCancelDirectFileData { path: FFFSPath; }
+
 export type FFMessageData =
   | FFMessageLoadConfig
   | FFMessageExecData
@@ -118,7 +126,9 @@ export type FFMessageData =
   | FFMessageListDirData
   | FFMessageDeleteDirData
   | FFMessageMountData
-  | FFMessageUnmountData;
+  | FFMessageUnmountData
+  | FFMessageMountDirectFileData
+  | FFMessageCancelDirectFileData;
 
 export interface Message {
   type: string;
